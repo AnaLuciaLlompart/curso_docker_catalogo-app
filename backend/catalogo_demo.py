@@ -1,0 +1,118 @@
+"""Catálogo de demo de la Variante C.
+
+Los datos salen del dump original de `ecommerce-cart/dev/dump/anonymous.sql`
+(tabla `products`): mismo SKU (`p_number`), mismo nombre, mismo precio y misma
+imagen. Se agregan `categoria`, `stock` y `descripcion`, que la tabla original
+no tenía y que el contrato de la variante sí pide.
+"""
+
+CATALOGO_DEMO = [
+    {
+        "sku": 852369,
+        "nombre": "Redmi Y2 (Black, 32 GB) (3 GB RAM)",
+        "precio": 25000,
+        "categoria": "Xiaomi",
+        "stock": 14,
+        "descripcion": "Pantalla 5.99\" HD+, cámara dual de 12 MP y batería de 3080 mAh.",
+        "imagen": "1.jpeg",
+    },
+    {
+        "sku": 159753,
+        "nombre": "Samsung Galaxy M20 (Charcoal Black, 4+64GB)",
+        "precio": 58000,
+        "categoria": "Samsung",
+        "stock": 9,
+        "descripcion": "Batería de 5000 mAh con carga rápida y pantalla Infinity-V de 6.3\".",
+        "imagen": "2.jpeg",
+    },
+    {
+        "sku": 357842,
+        "nombre": "OPPO K1 (Piano Black, 64 GB) (4 GB RAM)",
+        "precio": 65000,
+        "categoria": "OPPO",
+        "stock": 6,
+        "descripcion": "Lector de huellas bajo la pantalla AMOLED y cámara frontal de 25 MP.",
+        "imagen": "3.jpeg",
+    },
+    {
+        "sku": 456654,
+        "nombre": "Apple iPhone X (Space Gray, 256 GB)",
+        "precio": 25000,
+        "categoria": "Apple",
+        "stock": 3,
+        "descripcion": "Super Retina de 5.8\", Face ID y chip A11 Bionic.",
+        "imagen": "4.jpeg",
+    },
+    {
+        "sku": 358426,
+        "nombre": "Vivo V15 Pro (Topaz Blue, 128 GB) (6 GB RAM)",
+        "precio": 55000,
+        "categoria": "Vivo",
+        "stock": 7,
+        "descripcion": "Cámara frontal pop-up de 32 MP y triple cámara trasera de 48 MP.",
+        "imagen": "5.jpeg",
+    },
+    {
+        "sku": 123222,
+        "nombre": "Honor 9N (Midnight Black, 32 GB) (3 GB RAM)",
+        "precio": 39000,
+        "categoria": "Honor",
+        "stock": 11,
+        "descripcion": "Pantalla FullView de 5.84\" con notch y cámara dual de 13 MP.",
+        "imagen": "6.jpeg",
+    },
+    {
+        "sku": 741852,
+        "nombre": "Lenovo K8 Note (Venom Black, 64 GB) (4 GB RAM)",
+        "precio": 36000,
+        "categoria": "Lenovo",
+        "stock": 5,
+        "descripcion": "Procesador Helio X23 de diez núcleos y Android puro.",
+        "imagen": "7.jpeg",
+    },
+    {
+        "sku": 963852,
+        "nombre": "Asus ZenFone Max M1 (Black, 32 GB) (3 GB RAM)",
+        "precio": 84000,
+        "categoria": "Asus",
+        "stock": 0,
+        "descripcion": "Batería de 4000 mAh que funciona también como power bank.",
+        "imagen": "8.jpeg",
+    },
+    {
+        "sku": 999666,
+        "nombre": "Apple iPhone 6 (Gold, 32 GB)",
+        "precio": 44000,
+        "categoria": "Apple",
+        "stock": 2,
+        "descripcion": "Clásico de 4.7\" con Touch ID y cuerpo de aluminio.",
+        "imagen": "9.jpeg",
+    },
+    {
+        "sku": 332211,
+        "nombre": "Samsung Galaxy A9 (Bubblegum Pink, 128 GB)",
+        "precio": 97000,
+        "categoria": "Samsung",
+        "stock": 4,
+        "descripcion": "Primer smartphone con cuatro cámaras traseras y pantalla de 6.3\".",
+        "imagen": "10.jpeg",
+    },
+    {
+        "sku": 848484,
+        "nombre": "Samsung Galaxy A8 Star (White, 64 GB) (6 GB RAM)",
+        "precio": 78000,
+        "categoria": "Samsung",
+        "stock": 8,
+        "descripcion": "Super AMOLED de 6.3\" y cámara dual de 16 MP + 24 MP.",
+        "imagen": "11.jpeg",
+    },
+    {
+        "sku": 379182,
+        "nombre": "Apple iPhone 8 Plus (Silver, 64 GB)",
+        "precio": 48000,
+        "categoria": "Apple",
+        "stock": 6,
+        "descripcion": "Pantalla Retina HD de 5.5\", carga inalámbrica y chip A11.",
+        "imagen": "12.jpeg",
+    },
+]
