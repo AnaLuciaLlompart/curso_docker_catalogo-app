@@ -652,7 +652,7 @@ frontend (3000) y la API (8000, depuración) publican puertos.
 Captura de las herramientas de desarrollo (pestaña Network, filtro Fetch/XHR)
 al crear un producto con imagen:
 
-![Pestaña Network al crear un producto](docs/tp3-network.png)
+<img src="image.png" alt="Pestaña Network al crear un producto" width="500">
 
 | Campo | Valor observado |
 | --- | --- |
