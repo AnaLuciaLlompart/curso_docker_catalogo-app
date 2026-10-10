@@ -826,3 +826,397 @@ porque conservaba la conexión al contenedor anterior.
 README; no hay ningún archivo ejecutable que lo reproduzca. Se resuelve la
 semana siguiente con Docker Compose: toda la configuración declarada en un
 único archivo y levantada con un comando, con `depends_on` para el orden.
+
+---
+
+## TP4 - Docker Compose y seguridad básica
+
+### Punto 1 - docker-compose.yml
+
+El archivo `docker-compose.yml` en la raíz del repo declara los tres servicios,
+la red `catalogo-net` y el volumen `catalogo-db-data`, ambos con `name:`
+explícito para que sean los mismos de la semana 3 (el volumen conserva el
+catálogo). Las credenciales se leen de un `.env` no versionado (ver punto 9).
+La base de datos no publica puertos. Antes del primer `up` se eliminaron los
+contenedores y la red creados a mano en el TP3; el volumen se reutilizó.
+
+```
+PS> docker rm -f catalogo-frontend catalogo-api catalogo-db
+catalogo-frontend
+catalogo-api
+catalogo-db
+PS> docker network rm catalogo-net
+catalogo-net
+PS> docker volume ls
+DRIVER    VOLUME NAME
+local     3312d95beecc287b5b3733df71d3ae147863ba8a402d4ff27b6e763b9bd8b050
+local     c648772f56a416321157bbf39487bfed34fd549e67a39cf54539991d374713cc
+local     catalogo-db-data
+```
+
+### Punto 2 - Healthcheck de catalogo-db
+
+```yaml
+healthcheck:
+  test:
+    - CMD-SHELL
+    - mongosh --quiet --eval "db.adminCommand('ping').ok" || exit 1
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 10s
+```
+
+El healthcheck ejecuta `db.adminCommand('ping')`, uno de los pocos comandos
+que MongoDB responde sin autenticación porque no accede a datos. Por eso no
+lleva credenciales, y esa es una ventaja frente a la variante B: en PostgreSQL
+el chequeo necesita un usuario y la contraseña queda escrita en el comando del
+healthcheck, visible con `docker inspect`; acá la contraseña no viaja en ningún
+lado. Lo que **no** verifica: que `ping` responda prueba que `mongod` está vivo
+y acepta conexiones, pero no que el usuario `catalogo_user` exista ni que la
+contraseña configurada sea la correcta. La base puede figurar `healthy` y la
+API fallar igualmente con `Authentication failed`, por ejemplo si el volumen ya
+estaba inicializado con otras credenciales. Un healthcheck verifica lo que
+verifica, no que todo funcione.
+
+### Punto 3 - Healthcheck de catalogo-api
+
+```yaml
+healthcheck:
+  test:
+    - CMD
+    - python
+    - -c
+    - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
+  interval: 5s
+  timeout: 3s
+  retries: 10
+  start_period: 15s
+```
+
+Usa `urllib`, incluida con Python; si `/health` no responde 2xx, `urlopen`
+lanza una excepción y el comando termina con código distinto de 0. No
+corresponde instalar `curl` solo para esto: agregaría un paquete y sus
+dependencias a una imagen construida para ser mínima (TP2), con más tamaño,
+más superficie de ataque y más vulnerabilidades que escanear, para una función
+que la imagen ya cumple con lo que trae. Además, como `/health` hace un `ping`
+a Mongo con las credenciales de la API, este healthcheck sí verifica lo que el
+de la base no podía.
+
+### Punto 4 - Healthcheck de catalogo-frontend
+
+```yaml
+healthcheck:
+  test:
+    - CMD-SHELL
+    - wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
+  interval: 5s
+  timeout: 3s
+  retries: 5
+  start_period: 5s
+```
+
+`wget` viene en BusyBox, ya presente en Alpine. Mide `/healthz`, que nginx
+responde sin tocar la API: la salud del frontend no depende de la de la API.
+
+### Punto 5 - depends_on con condición
+
+**(a) `catalogo-api` → `catalogo-db`.** La API no solo necesita que el nombre
+`catalogo-db` resuelva: tiene que conectarse y sembrar el catálogo. La forma
+corta `depends_on: [catalogo-db]` espera a que el contenedor arranque, no a
+que MongoDB acepte conexiones. Con `condition: service_healthy`, la API
+arranca recién cuando el `ping` del healthcheck responde. La API además
+reintenta la conexión durante unos 30 segundos; ese reintento es lo único que
+subsistirá en Kubernetes, donde `depends_on` no existe.
+
+**(b) `catalogo-frontend` → `catalogo-api`.** Lo que no puede faltar es algún
+`depends_on`: sin él, Compose arranca todo a la vez, el frontend sale antes
+que la API, nginx no resuelve el upstream y termina con `host not found in
+upstream`. A nginx le basta con que el nombre resuelva, así que la forma corta
+también funcionaría; `service_healthy` hace además que el frontend arranque
+con la API ya respondiendo, sin devolver `502` en los primeros segundos.
+
+### Punto 6 - Validar y levantar
+
+```
+PS> docker compose up --build -d
+[+] Building 17.2s (34/34) FINISHED
+...
+ => [catalogo-api] resolving provenance for metadata file  0.0s
+[+] Running 6/6
+ ✔ catalogo-api:v1              Built  0.0s
+ ✔ catalogo-frontend:v1         Built  0.0s
+ ✔ Network catalogo-net         Created  0.1s
+ ✔ Container catalogo-db        Healthy  6.6s
+ ✔ Container catalogo-api       Healthy  12.2s
+ ✔ Container catalogo-frontend  Started  12.4s
+```
+
+```
+PS> docker compose ps
+NAME                IMAGE                  COMMAND                  SERVICE             CREATED              STATUS                        PORTS
+catalogo-api        catalogo-api:v1        "uvicorn main:app --…"   catalogo-api        About a minute ago   Up About a minute (healthy)   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+catalogo-db         mongo:7                "docker-entrypoint.s…"   catalogo-db         About a minute ago   Up About a minute (healthy)   27017/tcp
+catalogo-frontend   catalogo-frontend:v1   "/docker-entrypoint.…"   catalogo-frontend   About a minute ago   Up About a minute (healthy)   0.0.0.0:3000->8080/tcp, [::]:3000->8080/tcp
+```
+
+```
+PS> docker compose logs -f catalogo-api
+catalogo-api  | INFO:     Started server process [1]
+catalogo-api  | INFO:     Waiting for application startup.
+catalogo-api  | [2026-10-10T18:07:07+0000] INFO conexión a MongoDB establecida (base=catalogodb)
+catalogo-api  | [2026-10-10T18:07:07+0000] INFO catálogo de demo sembrado (12 productos)
+catalogo-api  | INFO:     Application startup complete.
+catalogo-api  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+catalogo-api  | INFO:     127.0.0.1:33104 - "GET /health HTTP/1.1" 200 OK
+catalogo-api  | INFO:     127.0.0.1:53858 - "GET /health HTTP/1.1" 200 OK
+catalogo-api  | INFO:     127.0.0.1:53862 - "GET /health HTTP/1.1" 200 OK
+catalogo-api  | INFO:     127.0.0.1:35944 - "GET /health HTTP/1.1" 200 OK
+...
+```
+
+### Punto 7 - Ciclo de vida de los datos
+
+```
+PS> (curl -s localhost:3000/api/productos | ConvertFrom-Json).Count
+13
+PS> docker compose down
+[+] Running 4/4
+ ✔ Container catalogo-frontend  Removed  0.4s
+ ✔ Container catalogo-api       Removed  1.0s
+ ✔ Container catalogo-db        Removed  0.3s
+ ✔ Network catalogo-net         Removed  0.4s
+PS> docker volume ls
+DRIVER    VOLUME NAME
+local     7ae16ffdd6549c14d8913d8ac1fa7ff6e720a438115410eca15543cd123bc814
+local     3312d95beecc287b5b3733df71d3ae147863ba8a402d4ff27b6e763b9bd8b050
+local     c648772f56a416321157bbf39487bfed34fd549e67a39cf54539991d374713cc
+local     catalogo-db-data
+PS> docker compose up -d
+time="2026-10-10T15:17:12-03:00" level=warning msg="volume \"catalogo-db-data\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+[+] Running 4/4
+ ✔ Network catalogo-net         Created  0.0s
+ ✔ Container catalogo-db        Healthy  5.9s
+ ✔ Container catalogo-api       Healthy  11.6s
+ ✔ Container catalogo-frontend  Started  11.8s
+```
+
+```
+PS> (curl -s localhost:3000/api/productos | Out-String).Substring(0, 300)
+[{"sku":999666,"categoria":"Apple","creado_en":"2026-10-10T16:34:26.117000","descripcion":"Clásico de 4.7\" con Touch ID y cuerpo de aluminio.","imagen_hash":"7e23251b780a76a1","imagen_tipo":"image/jpeg","nombre":"Apple iPhone 6 (Gold, 32 GB)","precio":44000,"stock":2,"id":"6aca6912de6edde0c4e296a9
+```
+
+`docker compose down` elimina los contenedores y la red del proyecto, todo lo
+que el próximo `up` recrea idéntico; el volumen `catalogo-db-data` sobrevive y
+por eso, tras `down` + `up`, el catálogo sigue completo (13 productos, el primero
+es el cargado a mano en el TP3). El aviso `volume "catalogo-db-data" already
+exists but was not created by Docker Compose` aparece porque el volumen se creó
+a mano en el TP3; es solo una advertencia y Compose lo usa igual. `docker compose down
+-v` elimina además los volúmenes declarados: los datos se pierden y el
+siguiente `up` arranca con una base vacía que la API vuelve a sembrar con los
+12 productos de ejemplo. `down -v` sirve para empezar de cero a propósito (por
+ejemplo, para que las variables `MONGO_INITDB_*` vuelvan a aplicarse) y para
+nada más.
+
+### Punto 8 - Siembra idempotente
+
+```
+PS> (curl -s localhost:3000/api/productos | ConvertFrom-Json).Count
+13
+PS> docker compose up -d --force-recreate catalogo-api
+time="2026-10-10T15:18:14-03:00" level=warning msg="volume \"catalogo-db-data\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+[+] Running 2/2
+ ✔ Container catalogo-db   Healthy  1.4s
+ ✔ Container catalogo-api  Started  1.7s
+PS> docker compose logs catalogo-api | Select-String "sembrado"
+catalogo-api  | [2026-10-10T18:18:17+0000] INFO catálogo de demo sembrado (12 productos)
+PS> (curl -s localhost:3000/api/productos | ConvertFrom-Json).Count
+13
+```
+
+Tras recrear la API con la base ya poblada, la siembra volvió a ejecutarse y
+la cantidad de productos se mantuvo: la siembra hace un *upsert* por SKU
+(actualiza el documento si existe, lo inserta si no), de modo que ejecutarla N
+veces deja el mismo resultado. Esa idempotencia es la precondición para la
+semana 6, cuando tres réplicas de la API arranquen a la vez y las tres siembren
+sobre la misma base.
+
+### Punto 9 - Contrato de variables
+
+El archivo `.env.example` (versionado) documenta todas las variables de las
+tres capas y qué componente consume cada una; el `.env` real contiene la
+contraseña y figura en el `.gitignore`. Las variables fijas entre entornos
+(`DB_HOST`, `DB_PORT`, `ROOT_PATH`, `SEED_DEMO`, `API_HOST`, `API_PORT`) van
+directamente en el `docker-compose.yml`. Si se usara `MONGO_URI` en lugar de
+las `DB_*`, esa cadena contiene la contraseña y debería ir completa en el
+Secret de la semana 7, nunca en un ConfigMap.
+
+```
+PS> Select-String -Path .gitignore -Pattern "^\.env$"
+.gitignore:3:.env
+PS> git status --short
+?? .env.example
+?? docker-compose.yml
+```
+
+Límite: `.env` saca la contraseña de Git, no del contenedor; `docker compose
+config` y `docker inspect` la siguen mostrando en texto plano.
+
+### Punto 10 - Revisión de seguridad
+
+```
+PS> docker compose exec catalogo-api id
+uid=1000(appuser) gid=1000(appuser) groups=1000(appuser)
+PS> docker compose exec catalogo-frontend id
+uid=101(nginx) gid=101(nginx) groups=101(nginx)
+PS> docker compose exec catalogo-db id
+uid=0(root) gid=0(root) groups=0(root)
+```
+
+```
+PS> docker compose ps
+NAME                IMAGE                  COMMAND                  SERVICE             CREATED         STATUS                   PORTS
+catalogo-api        catalogo-api:v1        "uvicorn main:app --…"   catalogo-api        7 minutes ago   Up 7 minutes (healthy)   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+catalogo-db         mongo:7                "docker-entrypoint.s…"   catalogo-db         8 minutes ago   Up 8 minutes (healthy)   27017/tcp
+catalogo-frontend   catalogo-frontend:v1   "/docker-entrypoint.…"   catalogo-frontend   8 minutes ago   Up 8 minutes (healthy)   0.0.0.0:3000->8080/tcp, [::]:3000->8080/tcp
+```
+
+```
+PS> docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --scanners vuln catalogo-api:v1
+Report Summary (resumido: solo los objetivos con vulnerabilidades)
+catalogo-api:v1 (debian 13.7)                                          debian       166
+.../site-packages/pymongo-4.8.0.dist-info/METADATA                     python-pkg     4
+.../site-packages/starlette-0.38.6.dist-info/METADATA                  python-pkg     7
+usr/local/lib/python3.12/site-packages/pip-25.0.1.dist-info/METADATA   python-pkg     6
+
+catalogo-api:v1 (debian 13.7)
+Total: 166 (UNKNOWN: 3, LOW: 61, MEDIUM: 58, HIGH: 44, CRITICAL: 0)
+
+Python (python-pkg)
+Total: 17 (UNKNOWN: 0, LOW: 2, MEDIUM: 10, HIGH: 5, CRITICAL: 0)
+```
+
+```
+PS> docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image --scanners vuln catalogo-frontend:v1
+Report Summary
+catalogo-frontend:v1 (alpine 3.21.3)   alpine   159
+
+catalogo-frontend:v1 (alpine 3.21.3)
+Total: 159 (UNKNOWN: 0, LOW: 42, MEDIUM: 76, HIGH: 39, CRITICAL: 2)
+```
+
+| Revisión | catalogo-db | catalogo-api | catalogo-frontend |
+| --- | --- | --- | --- |
+| Usuario del proceso (`id`) | `root` (uid 0; la imagen oficial baja a `mongodb` con gosu al arrancar `mongod`) | `appuser` (uid 1000) | `nginx` (uid 101) |
+| Puertos publicados | ninguno (`27017/tcp` solo en la red) | `8000:8000`, solo depuración; en la semana 6 pasa a ser interno | `3000:8080`, único punto de entrada |
+| Vulnerabilidades, sistema base | no escaneada (imagen oficial) | 166 (Debian 13.7) · 2 con Fixed Version | 159 (Alpine 3.21.3) · 159 con Fixed Version (2 CRITICAL) |
+| Vulnerabilidades, dependencias | — | 17 (Python: pymongo 4, starlette 7, pip 6) · 17 con Fixed Version | — (sin runtime: solo archivos estáticos) |
+
+Las dos imágenes propias corren con un usuario distinto de root (`appuser` uid
+1000 y `nginx` uid 101); la base muestra `root` porque `docker compose exec`
+abre un proceso nuevo con el usuario de la imagen, aunque `mongod` corre como
+`mongodb`. En la API, de las 166 vulnerabilidades del sistema base Debian solo 2
+tienen versión corregida (`liblzma5`); el resto se documenta y se decide:
+aceptarlas o cambiar de base. Las 17 de las dependencias de Python (`pymongo`,
+`starlette` y `pip`) tienen todas versión corregida: se resuelven actualizando
+`requirements.txt` y reconstruyendo. En el frontend, las 159 vulnerabilidades
+(2 críticas) tienen parche porque la base Alpine 3.21.3 quedó vieja: se resuelven
+reconstruyendo sobre una versión más nueva de `nginx-unprivileged`.
+
+### Punto 11 - Mínimo privilegio
+
+```
+PS> docker compose up -d
+time="2026-10-10T15:34:43-03:00" level=warning msg="volume \"catalogo-db-data\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+[+] Running 3/3
+ ✘ Container catalogo-db        Error  5.9s
+ ✔ Container catalogo-api       Recreated  4.3s
+ ✔ Container catalogo-frontend  Recreated  0.5s
+dependency failed to start: container catalogo-db exited (1)
+PS> docker compose logs catalogo-db
+catalogo-db  | find: '/data/db/journal': Permission denied
+catalogo-db  | find: '/data/db/.mongodb': Permission denied
+catalogo-db  | find: '/data/db/diagnostic.data': Permission denied
+PS> docker compose ps -a
+NAME                IMAGE                  COMMAND                  SERVICE             CREATED              STATUS                          PORTS
+catalogo-api        catalogo-api:v1        "uvicorn main:app --…"   catalogo-api        About a minute ago   Created
+catalogo-db         mongo:7                "docker-entrypoint.s…"   catalogo-db         About a minute ago   Exited (1) About a minute ago
+catalogo-frontend   catalogo-frontend:v1   "/docker-entrypoint.…"   catalogo-frontend   About a minute ago   Created
+```
+
+```
+PS> docker compose up -d; Start-Sleep 20; docker compose ps
+time="2026-10-10T15:53:13-03:00" level=warning msg="volume \"catalogo-db-data\" already exists but was not created by Docker Compose. Use `external: true` to use an existing volume"
+[+] Running 3/3
+ ✔ Container catalogo-db        Healthy  0.5s
+ ✔ Container catalogo-api       Healthy  5.7s
+ ✔ Container catalogo-frontend  Started  0.2s
+NAME                IMAGE                  COMMAND                  SERVICE             CREATED          STATUS                    PORTS
+catalogo-api        catalogo-api:v1        "uvicorn main:app --…"   catalogo-api        18 minutes ago   Up 26 seconds (healthy)   0.0.0.0:8000->8000/tcp, [::]:8000->8000/tcp
+catalogo-db         mongo:7                "docker-entrypoint.s…"   catalogo-db         45 seconds ago   Up 44 seconds (healthy)   27017/tcp
+catalogo-frontend   catalogo-frontend:v1   "/docker-entrypoint.…"   catalogo-frontend   18 minutes ago   Up 20 seconds (healthy)   0.0.0.0:3000->8080/tcp, [::]:3000->8080/tcp
+```
+
+```
+PS> docker inspect --format '{{.HostConfig.CapDrop}} {{.HostConfig.CapAdd}}' catalogo-api catalogo-frontend catalogo-db
+[ALL] []
+[ALL] []
+[ALL] [CAP_CHOWN CAP_DAC_OVERRIDE CAP_SETGID CAP_SETUID]
+```
+
+Con `cap_drop: [ALL]` en los tres servicios, `catalogo-api` y
+`catalogo-frontend` siguieron funcionando: corren como usuarios sin privilegios
+desde el primer instante (`appuser` y `nginx`), escuchan en puertos altos (8000
+y 8080) y no realizan ninguna operación que requiera una capability.
+`catalogo-db` terminó con `find: '/data/db/journal': Permission denied`: la
+imagen oficial de MongoDB arranca como root, recorre el directorio de datos
+para dejarlo a nombre del usuario `mongodb` (`find` + `chown`) y luego cambia a
+ese usuario con `gosu` (`setuid`/`setgid`); sin capabilities, root no puede
+entrar a las carpetas de `mongodb`, ni cambiar dueños, ni cambiar de usuario. Agregando de a una y leyendo el error en cada paso,
+la lista final es:
+
+```yaml
+catalogo-db:
+  cap_drop: [ALL]
+  cap_add: [SETGID, SETUID, CHOWN, DAC_OVERRIDE]
+```
+
+- `SETUID` / `SETGID`: pasar de root al usuario `mongodb`.
+- `CHOWN`: dejar los archivos de `/data/db` a nombre de `mongodb`.
+- `DAC_OVERRIDE`: que root pueda recorrer `/data/db` aunque las carpetas sean de
+  `mongodb` con permisos cerrados. Hizo falta porque el volumen ya traía datos
+  del TP3.
+
+Nota: al cambiar `cap_add` hay que recrear el contenedor (`docker compose up -d
+--force-recreate catalogo-db`); mientras no se recreó, `docker inspect` seguía
+mostrando solo `[CAP_SETGID]` y el error se repetía.
+
+La base necesita capabilities porque su propio proceso de arranque hace
+trabajo de root antes de bajar de privilegios; las otras dos capas no, porque
+nunca son root.
+
+### Punto 12 - Compose frente a los docker run de la semana 3
+
+| Semana 3 (docker run) | Semana 4 (docker-compose.yml) |
+| --- | --- |
+| `docker network create catalogo-net` | bloque `networks:` con `name: catalogo-net`; la crea el `up` |
+| `docker volume create catalogo-db-data` | bloque `volumes:` con `name: catalogo-db-data` |
+| `--name X` | `container_name: X` |
+| `--network catalogo-net` en cada run | `networks: [catalogo-net]` en cada servicio |
+| `-v catalogo-db-data:/data/db` | `volumes: [catalogo-db-data:/data/db]` |
+| `-e VAR=valor` (diez veces, con la contraseña a la vista) | `environment:` con `${VAR}` leídas de `.env`, fuera de Git |
+| `-p 3000:8080`, `-p 8000:8000` | `ports:` |
+| `docker build -t catalogo-api:v1 ./backend` | `build: ./backend` + `image: catalogo-api:v1` |
+| el orden de tipeo y el `Start-Sleep 10` entre base y API (memoria) | `depends_on` con `condition: service_healthy` (declarado) |
+| nada | `healthcheck` en los tres servicios: Compose sabe cuándo cada capa está lista |
+| nada | `cap_drop: [ALL]` y `cap_add` mínimo: privilegios explícitos |
+| cuatro comandos, catorce flags | `docker compose up -d` / `docker compose down` |
+
+**Qué desapareció:** los comandos sueltos, el orden en la memoria de quien
+levanta el proyecto, la espera manual entre base y API, la contraseña escrita
+en la terminal. **Qué apareció:** un archivo versionado que es la única fuente
+de verdad, healthchecks que definen "listo", dependencias declaradas, variables
+sensibles fuera del repo y privilegios mínimos. Este archivo es la referencia
+contra la que, desde la semana 5, se escriben los manifiestos de Kubernetes:
+cada servicio se vuelve un manifiesto, `ports` un Service, `healthcheck` una
+probe, y `depends_on` desaparece (solo queda el reintento de la API).

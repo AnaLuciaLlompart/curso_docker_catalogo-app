@@ -1,0 +1,84 @@
+services:
+
+  catalogo-db:
+    image: mongo:7
+    container_name: catalogo-db
+    cap_drop: [ALL]
+    cap_add: [SETGID, SETUID, CHOWN, DAC_OVERRIDE]
+    networks: [catalogo-net]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${DB_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - catalogo-db-data:/data/db
+    
+    healthcheck:                                   # punto 2
+      test:
+        - CMD-SHELL
+        - mongosh --quiet --eval "db.adminCommand('ping').ok" || exit 1
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  catalogo-api:
+    build: ./backend
+    image: catalogo-api:v1
+    container_name: catalogo-api
+    cap_drop: [ALL]
+    networks: [catalogo-net]
+    environment:
+      DB_HOST: catalogo-db
+      DB_PORT: "27017"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      APP_VERSION: ${APP_VERSION}
+      ROOT_PATH: /api
+      SEED_DEMO: "true"
+    ports:
+      - "8000:8000"                                # solo depuración
+    depends_on:                                    # punto 5a
+      catalogo-db:
+        condition: service_healthy
+    healthcheck:                                   # punto 3
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  catalogo-frontend:
+    build: ./frontend
+    image: catalogo-frontend:v1
+    container_name: catalogo-frontend
+    cap_drop: [ALL]
+    networks: [catalogo-net]
+    environment:
+      API_HOST: catalogo-api
+      API_PORT: "8000"
+    ports:
+      - "3000:8080"
+    depends_on:                                    # punto 5b
+      catalogo-api:
+        condition: service_healthy
+    healthcheck:                                   # punto 4
+      test:
+        - CMD-SHELL
+        - wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+networks:
+  catalogo-net:
+    name: catalogo-net
+
+volumes:
+  catalogo-db-data:
+    name: catalogo-db-data
